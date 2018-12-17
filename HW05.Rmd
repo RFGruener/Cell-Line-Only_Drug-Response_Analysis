@@ -1,0 +1,290 @@
+---
+title: "HW05"
+author: "Robert Gruener"
+date: "November 4, 2018"
+output: github_document
+---
+
+### Let's Do Some Cancer Biology
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(broom)
+
+theme_set(theme_bw())
+```
+
+I am in a cancer biology lab, and wanted to learn R to help with my research. So for this hw assignment, we are going to be using some data to see how cancer cell lines respond to various drug treatments. In particular, we are going to focus on triple-negative breast cancers (TNBC), a subtype of breast cancer that has poor prognosis and is currently treated with chemotherapies.
+
+## Let's Get the Data
+
+The data that I'll be using is originally from [GDSC](https://www.cancerrxgene.org/) and [CTRP](https://portals.broadinstitute.org/ctrp.v2.1/), but I placed files that were slightly modified already in the repo for this assignment. They are both large cancer cell line drug screens, but are independent of one another. 
+
+The first cell line info page was from [cellosaurus](https://web.expasy.org/cellosaurus/), the second breast cancer cell line info is from [a recent review](http://www.jcancer.org/v08p3131.htm) and shows the molecular classifications of the breast cancer cell lines. These files are also in the repo. 
+
+Shown below is some of the information these data files contain. 
+
+```{r, data_download, cache=TRUE}
+print("GDSC")
+(GDSC <- read_tsv(file = "GDSC_2016_Drug_Data.txt"))
+
+print("CTRP")
+(CTRP <- read_tsv(file = "CTRPv2_AUC.txt"))
+
+print("Cell Line Info")
+(cell_line_info <- readxl::read_xlsx(path = "All_Cell_Line_Info_10-30-17.xlsx"))
+
+print("Breast cancer cell line info")
+(breast_cell_line_info <- read_csv(file = "Breast_CCL_Subtypes.csv"))
+```
+
+## Cleaning and Subsetting the data
+
+We now need to combine the info files with the drug data, and subset to just the breast cancer cell lines
+
+```{r, clean_subset}
+GDSC_breast <- GDSC %>% 
+  select(Drug.name, Drug.Id, Cell.line.name, Tissue, Avg.IC50) %>% #selecting relevant columns
+  filter(Tissue== "breast") %>% #filter to breast cancers only
+  #need to remove - from cell line names to make matches easier, chose to remove all punctuation as follows:
+  mutate(CCL_Name = gsub("[[:punct:]]", replacement = "", x = Cell.line.name)) %>% 
+  #need to join with breast cancer subtype data
+  left_join(., breast_cell_line_info, by = c("CCL_Name" = "Cell lines"))
+
+
+#I need to subset CTRP to breast cancers as well, but that information is not in here yet
+#so I will join it with the cell line information
+
+CTRP_breast <- CTRP %>% 
+  left_join(., cell_line_info, by= c("CCL_Name" = "Cell_Line_Name")) %>% 
+  select(CCL_Name, Tissue, Cellosaurus_Id, cpd_name, Avg_AUC) %>% 
+  filter(Tissue == "breast") %>% 
+  #need to remove - from cell line names to make matches easier, chose to remove all punctuation
+  mutate(CCL_Name = gsub("[[:punct:]]", replacement = "", x = CCL_Name)) %>% 
+  left_join(., breast_cell_line_info, by = c("CCL_Name" = "Cell lines"))
+```
+
+Here is how the data looks once cleaned  
+``` {r, echo = TRUE}
+GDSC_breast
+CTRP_breast
+``` 
+
+
+Unfortunately, there is likely some missing subtype information still. Let's see:
+
+``` {r, clean_subset_missing}
+# Unfortunately, there is likely some missing subtype information still. Let's see:
+
+missing_gdsc <- GDSC_breast %>% 
+    select(CCL_Name, Subtype) %>% 
+    filter(is.na(Subtype)) %>% 
+    unique()
+
+missing_CTRP <- CTRP_breast %>% 
+    select(CCL_Name, Subtype) %>% 
+    filter(is.na(Subtype)) %>% 
+    unique()
+
+either_missing <- bind_rows(missing_CTRP, missing_gdsc) %>% 
+    unique()
+knitr::kable(either_missing)
+
+```
+
+Those 12 values will be manually curated. The top 10 rows of the final cleaned up data frame without any missing NA values and with the relevant columns selected is displayed below for GDSC and CTRP respectively: 
+
+```{r, clean_subset_2}
+#Yup, there are 12 missing values. Hang-on while I go manually curate them...
+# these sites helped with the manual curation, 
+# https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3127435/, https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5001206/
+
+missing_subtype <- c("TNB", "H", "LA", "UN", "TNB", "UN", "TN", "LB", "TN", "H", "UN", "TNB") #"UN", unclassifiable, problematic cell lines with conflicting status claims in the literature
+names(missing_subtype) <- either_missing$CCL_Name
+either_missing$Subtype <- missing_subtype
+
+#now, to replace those NA values with the manually curated values above
+GDSC_breast <- GDSC_breast %>% 
+  mutate(Subtype= if_else(is.na(Subtype), missing_subtype[CCL_Name], Subtype)) %>% 
+  select(cpd_name = Drug.name, CCL_Name, Subtype, Avg_IC50 = Avg.IC50)
+
+CTRP_breast <- CTRP_breast %>% 
+  mutate(Subtype= if_else(is.na(Subtype), missing_subtype[CCL_Name], Subtype)) %>%
+  select(cpd_name, CCL_Name, Subtype, Avg_AUC) %>% 
+  unique()
+
+#now let's see how the data looks:
+GDSC_breast
+CTRP_breast
+
+```
+
+## Number of Cell Lines per Subtype
+
+Now that things look tidy, lets count the number of cell lines in each breast cancer group. 
+
+```{r, count, echo= FALSE}
+knitr::kable(GDSC_breast %>% 
+  select(CCL_Name, Subtype) %>%
+  unique() %>% 
+  count(Subtype), caption = "GDSC", format = "markdown")
+
+knitr::kable(CTRP_breast %>% 
+  select(CCL_Name, Subtype) %>%
+  unique() %>% 
+  count(Subtype), caption = "CTRP", format = "markdown")
+
+```
+
+Side-note, if anyone knows why the caption feature on kable doesn't seem to print anything, let me know. 
+
+## Comparing Cell Line Response Across BC subtypes
+
+Because of the low n-values, we will compare mean response between TNBC cells to non-TNBC cells. 
+
+```{r, compare_response}
+
+#make a new column to seprate TNBC from Other
+GDSC_breast <- GDSC_breast %>% 
+  mutate(TNBC = ifelse(Subtype %in% c("TN", "TNA", "TNB"), "yes", "no"))
+
+CTRP_breast <- CTRP_breast %>% 
+  mutate(TNBC = ifelse(Subtype %in% c("TN", "TNA", "TNB"), "yes", "no"))
+
+GDSC_breast
+CTRP_breast
+``` 
+
+With that, now we will get into the statistics. Below are the significant results for both datasets:
+
+```{r, compare_results_statistics}
+GDSC_t.test_results <- GDSC_breast %>% 
+  group_by(cpd_name) %>% 
+  do(tidy(t.test(Avg_IC50 ~ TNBC, data = .))) %>% # thanks second answer here
+  # https://stackoverflow.com/questions/26244321/dplyr-summarise-multiple-columns-using-t-test
+  ##I now need to change names because it is unclear what the values are. 
+  #it goes in alphabetical order, so Estimate is the mean IC50 when TNBC=="no" minus the mean of TNBC=="yes" 
+  select(cpd_name, Effect_notTNBC.minus.TNBC = estimate, p.value) %>% 
+  ungroup() %>% #this is necessary inorder to adjust the p.values
+  mutate(FDR = p.adjust(p.value, method = "fdr"), 
+         more_sensitive = if_else(Effect_notTNBC.minus.TNBC > 0, "TNBC", "non-TNBC")) #this summarizes 
+          ##the effect direction. The smaller the number, the more sensitive the cell was to this drug
+          ###So if the values are positive it means TNBC was more negative and thus more sensitive
+
+# Lets do the same thing for the other dataset
+
+CTRP_t.test_results <- CTRP_breast %>% 
+  #this next chunk is necessary for CTRP, because there are some cell lines that were only tested against one subtype, so a t-test isn't possible:
+  group_by(cpd_name) %>% 
+  filter(length(Avg_AUC)>9) %>% #after trial and error, 
+  ## 9 is the minimum number of unique observations that doesn't throw an error. 
+  ### I think this is fine, since having less than 9 total cell lines for a compound is unlikely to give sig. results anyway. 
+  do(tidy(t.test(data = ., Avg_AUC~TNBC))) %>% # thanks second answer here
+  # https://stackoverflow.com/questions/26244321/dplyr-summarise-multiple-columns-using-t-test
+  ##I now need to change names because it is unclear what the values are. 
+  #it goes in alphabetical order, so Estimate is the mean IC50 when TNBC=="no" minus the mean of TNBC=="yes" 
+  select(cpd_name, Effect_notTNBC.minus.TNBC = estimate, p.value) %>% 
+  ungroup() %>% #this is necessary inorder to adjust the p.values
+  mutate(FDR = p.adjust(p.value, method = "fdr"), 
+         more_sensitive = if_else(Effect_notTNBC.minus.TNBC > 0, "TNBC", "non-TNBC")) #this summarizes 
+          ##the effect direction. The smaller the number, the more sensitive the cell was to this drug
+          ###So if the values are positive it means TNBC was more negative and thus more sensitive
+
+#Let's Print The Most Significant Results:
+print("GDSC")
+knitr::kable(GDSC_t.test_results %>% filter(FDR < 0.05) %>% arrange(FDR))
+print("CTRP")  
+knitr::kable(CTRP_t.test_results %>% filter(FDR < 0.05) %>% arrange(FDR))
+
+
+```
+
+As we can see, there are `r length(GDSC_t.test_results$FDR[GDSC_t.test_results$FDR < 0.05])` significant results in GDSC after multiple comparision correction. For CTRP, the number is only `r length(CTRP_t.test_results$FDR[CTRP_t.test_results$FDR < 0.05])`
+
+Also, it is interesting to note that typically the direction is in favor of TNBC being *more sensitive*. In GDSC, even if we are very liberal and use a p.value of 0.1 (note, p-value and not FDR), there are `r sum(GDSC_t.test_results[GDSC_t.test_results$p.value < 0.10,]$more_sensitive == "TNBC")` drugs that are more effective on TNBC cells and only `r sum(GDSC_t.test_results[GDSC_t.test_results$p.value < 0.10,]$more_sensitive == "non-TNBC")`. 
+For CTRP, there are `r sum(CTRP_t.test_results[CTRP_t.test_results$p.value < 0.10,]$more_sensitive == "TNBC")` compounds that generally show more sensitivity in TNBC, and only `r sum(CTRP_t.test_results[CTRP_t.test_results$p.value < 0.10,]$more_sensitive == "non-TNBC")` that have the opposite effect direction. 
+This is surprising because TNBC is generally considered more resistant to therapy in comparison to the other breast cancer subtypes.
+
+
+## Graphing the result for select drugs
+
+I now would like to graph some key results for some drugs I am interested in. Since I am going to make the same kind of graph for 6 different drugs, I'm going to first make a graphing_function
+
+### Graphing Function
+I'm choosing to show the code for the graphing function, just because there isn't much tables, etc. I could do with it. 
+
+```{r, graphing_function, echo = TRUE}
+
+drug_grapher <- function(drug, dataset){
+  if(dataset == "GDSC_breast") { #must be the appropriate dataset
+    drug_plot <- GDSC_breast %>%   
+      filter(cpd_name == drug) %>% #filters to the drug provided
+      ggplot(aes(x=TNBC, y= Avg_IC50, fill = TNBC)) + 
+        geom_boxplot() + #makes box plot based on TNBC status and drug response
+        geom_point() + #adds points to visualize the individual values
+        labs(x = "TNBC status",
+            y = "Average IC50", 
+            title = paste(drug, "Response in TNBC vs non-TNBC CCLs", sep = " "), 
+            caption = dataset) + 
+        annotate("text", -Inf, Inf,  #adds the p-values and FDR values as text to the graph 
+                 label = paste("FDR of", GDSC_t.test_results$FDR[GDSC_t.test_results$cpd_name == drug], sep = " "), 
+                 hjust = 0, vjust = 3) +
+      annotate("text", -Inf, Inf,  
+               label = paste("P-value of", GDSC_t.test_results$p.value[GDSC_t.test_results$cpd_name == drug], sep = " "), 
+               hjust = 0, vjust = 1) +
+        theme(legend.position = "none")
+    return(drug_plot)
+  } #close first if statement 
+  if(dataset == "CTRP_breast") { #same thing for the other dataset
+    drug_plot <- CTRP_breast %>% 
+      filter(cpd_name == drug) %>% 
+      ggplot(aes(x=TNBC, y= Avg_AUC, fill = TNBC)) +
+      geom_boxplot() +
+      geom_point() + 
+      labs(x = "TNBC status",
+           y = "Average AUC", 
+           title = paste(drug, "Response in TNBC vs non-TNBC CCLs", sep = " "), 
+           caption = dataset) + 
+      annotate("text", -Inf, Inf,  
+               label = paste("FDR of", CTRP_t.test_results$FDR[CTRP_t.test_results$cpd_name == drug], sep = " "), 
+               hjust = 0, vjust = 3) +
+      annotate("text", -Inf, Inf,  
+               label = paste("P-value of", CTRP_t.test_results$p.value[CTRP_t.test_results$cpd_name == drug], sep = " "), 
+               hjust = 0, vjust = 1) + 
+      theme(legend.position = "none")
+    return(drug_plot)
+  } #close if
+} #close function
+
+```
+
+
+### Graphing results
+
+Now, finally, I'll be graphing the results of those 6 select drugs. 
+
+```{r, graphs}
+
+drugs_of_interest <- list()  #making a list so I can pair the drug and dataset vectors  
+drugs_of_interest[[1]] <- c("VAF-347", "I-BET151", "JQ-1", "GSK525762A", "I-BET-762", "PFI-1", "MK-1775", "birinapant")
+drugs_of_interest[[2]] <- c("CTRP_breast", "CTRP_breast", "CTRP_breast", "CTRP_breast", "GDSC_breast", "GDSC_breast", "CTRP_breast", "CTRP_breast") 
+
+#now runs a for loop to graph all the data
+#NB: with ggplot to get the plots to print to the console in a for loop, you must use the print function
+for (i in 1:length(drugs_of_interest[[1]])) {
+  print(drug_grapher(drug = drugs_of_interest[[1]][i], dataset = drugs_of_interest[[2]][i]))
+} 
+
+```
+
+As we can see from the graphs, of the drugs we are interested in ("VAF-347", "I-BET151", "JQ-1", "GSK525762A", "I-BET-762", "PFI-1", "MK-1775", "birinapant"), only the drug MK-1775 shows a significant increase in sensitivity in the TNBC cell lines. That is, based on these cell line results, MK-1775 looks to be more effective in TNBC compared to other breast cancer subtypes. 
+
+
+
+## Session Info:
+
+```{r, echo= TRUE}
+sessionInfo()
+```
+
+
