@@ -57,7 +57,7 @@ GDSC_breast <- GDSC %>%
 
 CTRP_breast <- CTRP %>% 
   left_join(., cell_line_info, by= c("CCL_Name" = "Cell_Line_Name")) %>% 
-  select(CCL_Name, Tissue, Cellosaurus_Id, cpd_name, Avg_AUC) %>% 
+  select(CCL_Name, Tissue, Cellosaurus_Id, cpd_name, Avg_AUC, apparent_ec50_umol) %>% 
   filter(Tissue == "breast") %>% 
   #need to remove - from cell line names to make matches easier, chose to remove all punctuation
   mutate(CCL_Name = gsub("[[:punct:]]", replacement = "", x = CCL_Name)) %>% 
@@ -110,7 +110,7 @@ GDSC_breast <- GDSC_breast %>%
 
 CTRP_breast <- CTRP_breast %>% 
   mutate(Subtype= if_else(is.na(Subtype), missing_subtype[CCL_Name], Subtype)) %>%
-  select(cpd_name, CCL_Name, Subtype, Avg_AUC) %>% 
+  select(cpd_name, CCL_Name, Subtype, Avg_AUC, apparent_ec50_umol) %>% 
   unique()
 
 #now let's see how the data looks:
@@ -279,6 +279,32 @@ for (i in 1:length(drugs_of_interest[[1]])) {
 
 As we can see from the graphs, of the drugs we are interested in ("VAF-347", "I-BET151", "JQ-1", "GSK525762A", "I-BET-762", "PFI-1", "MK-1775", "birinapant"), only the drug MK-1775 shows a significant increase in sensitivity in the TNBC cell lines. That is, based on these cell line results, MK-1775 looks to be more effective in TNBC compared to other breast cancer subtypes. 
 
+```{r, leptomycin B}
+
+CTRP_breast %>% 
+  filter(cpd_name == "leptomycin B") %>% 
+  arrange(Avg_AUC) %>% 
+  ggplot(aes(x = reorder(CCL_Name, Avg_AUC), y = Avg_AUC)) + 
+  geom_col() + 
+  theme(axis.text.x = element_blank())
+  
+
+CTRP_breast %>% 
+  filter(cpd_name == "leptomycin B") %>% 
+  mutate(log_ec50 = log(apparent_ec50_umol*1000)) %>% 
+  filter(log_ec50 > 0) %>% 
+  ggplot(aes(x = reorder(CCL_Name, apparent_ec50_umol), y = log_ec50, fill = TNBC)) + 
+  geom_col(color = "dark grey") + 
+  theme(axis.text.x = element_blank(),
+        legend.position = c(0.12, 0.85)) +
+  labs(x = "Cell Lines by Sensitivity",
+       y = "log(EC50) in nM", 
+       title = "CTRP Cell Line sensitivity to XPO1 Inhibitor Leptomycin B",
+       fill = "TNBC Status") + 
+  scale_fill_manual(labels = c("RPBC Cell Line", "TNBC Cell Line"), values = c("dark grey","light blue"))
+
+
+```
 
 
 ## Session Info:
